@@ -1,0 +1,13 @@
+*.d
+*.o
+*.lst
+*.map
+*.shbin
+*_shbin.h
+
+/build
+/*.elf
+/*.3dsx
+/*.cia
+/*.smdh
+/*.bnr

@@ -1,0 +1,153 @@
+; actor shader for Grim Fandango in SCUMMVM
+
+; ORIGINAL GLSL CODE
+;	const float CONSTANT_ATTENUATION = 1.0;
+;	const float LINEAR_ATTENUATION = 0.0;
+;	const float QUADRATIC_ATTENUATION = 1.0;
+;
+;	in vec3 position;
+;	in vec2 texcoord;
+;	in vec4 color;
+;	in vec3 normal;
+;
+;	uniform highp mat4 modelMatrix;
+;	uniform highp mat4 viewMatrix;
+;	uniform highp mat4 projMatrix;
+;	uniform highp mat4 extraMatrix;
+;	uniform UBOOL textured;
+;	uniform UBOOL lightsEnabled;
+;	uniform highp vec2 texScale;
+;
+;	struct shadow_info {
+;		UBOOL _active;
+;		vec3 _color;
+;		vec3 _light;
+;		vec3 _point;
+;		vec3 _normal;
+;	};
+;
+;	uniform shadow_info shadow;
+;
+;	out vec2 Texcoord;
+;	out vec4 Color;
+;
+;	void main() {
+;		vec4 pos = modelMatrix * extraMatrix * vec4(position, 1.0);
+;
+;		// See http://en.wikipedia.org/wiki/Line-plane_intersection
+;		if (UBOOL_TEST(shadow._active)) {
+;			pos /= pos.w;
+;			vec3 l = pos.xyz - shadow._light;
+;			float d = dot(shadow._point - shadow._light, shadow._normal) / dot(l, shadow._normal);
+;			vec3 p = shadow._light + d * l;
+;			pos = vec4(p, 1.0);
+;		}
+;
+;		vec4 positionView = viewMatrix * pos;
+;		gl_Position = projMatrix * positionView;
+;
+;		if (UBOOL_TEST(shadow._active)) {
+;			Color = vec4(shadow._color, 1.0);
+;		} else {
+;			Color = color;
+;		}
+;
+;		if (UBOOL_TEST(textured)) {
+;			Texcoord = vec2(0.0, 1.0) + (texcoord / texScale);
+;		} else {
+;			Texcoord = vec2(0.0, 0.0);
+;		}
+;	}
+
+; NOTES:
+;	- "lightsEnabled" is not actually used
+;	- Input vector "normal" is passed to the shader as part of the VBO, but isn't used here
+;	- Optimize out input vector "color"; it is always (1.0, 1.0, 1.0, 1.0)
+;	- Attenuations are not needed in this shader
+;	- Shuffle around code to reduce stalling
+
+
+; Constants
+.constf myConst(0.0, 1.0, 2.0, 0.0)
+.alias       ZEROS	 myConst.xxxx
+.alias        ONES	 myConst.yyyy
+.alias    ZERO_ONE	 myConst.xyxy
+
+
+; Inputs
+.alias    inPos		v0		; in vec3 position
+.alias inTcoord		v1		; in vec2 texcoord
+
+
+; Uniforms
+.fvec extraMatrix[4]		; mat4 extraMatrix
+.fvec modelMatrix[4]		; mat4 modelMatrix
+.fvec  viewMatrix[4]		; mat4  viewMatrix
+.fvec  projMatrix[4]		; mat4  projMatrix
+.fvec    texScale			; vec2    texScale
+
+
+; Outputs
+.out outPos		pos		; gl_Position
+.out outTcoord	tcoord0	; out vec2 Texcoord
+.out outColor	clr		; out vec4 Color
+
+
+; Register Aliases
+.alias TMP_0			r0
+.alias TMP_1			r1
+.alias TMP_2			r2
+.alias TMP_3			r3
+.alias vec3_L			r9.xyz	;  vec3 l
+.alias flot_D			r9.w	; float d
+.alias vec4_posView		r6		;  vec4 positionView
+
+
+; Main
+.entry main
+.proc main
+	; TMP_0 = vec4(inPos, 1.0);
+	mov TMP_0.xyz,		inPos.xyz
+	mov TMP_0.w,		ONES
+
+	; extraVecPos (TMP_2, vec4) = extraMatrix (mat4) * TMP_0 (vec4);
+	dp4 TMP_1.x,		extraMatrix[0],		TMP_0
+	dp4 TMP_1.y,		extraMatrix[1],		TMP_0
+	dp4 TMP_1.z,		extraMatrix[2],		TMP_0
+	dp4 TMP_1.w,		extraMatrix[3],		TMP_0
+
+	; TMP_2 = modelMatrix (mat4) * extraVec (vec4);
+	dp4 TMP_2.x,		modelMatrix[0],		TMP_1
+	dp4 TMP_2.y,		modelMatrix[1],		TMP_1
+	dp4 TMP_2.z,		modelMatrix[2],		TMP_1
+	dp4 TMP_2.w,		modelMatrix[3],		TMP_1
+
+	; TMP_3 = viewMatrix (mat4) * TMP_2
+	dp4 TMP_3.x,		viewMatrix[0],		TMP_2
+	dp4 TMP_3.y,		viewMatrix[1],		TMP_2
+	dp4 TMP_3.z,		viewMatrix[2],		TMP_2
+	dp4 TMP_3.w,		viewMatrix[3],		TMP_2
+
+	; outPos = projMatrix * positionView;
+	; dp4 outPos.x,		projMatrix[0],		TMP_3
+	; dp4 outPos.y,		projMatrix[1],		TMP_3
+	; dp4 outPos.z,		projMatrix[2],		TMP_3
+	; dp4 outPos.w,		projMatrix[3],		TMP_3
+	dp4 r4.x,			projMatrix[0],		TMP_3
+	dp4 r4.y,			projMatrix[1],		TMP_3
+	dp4 r4.z,			projMatrix[2],		TMP_3
+	dp4 r4.w,			projMatrix[3],		TMP_3
+	rcp r5.w,			r4.w
+	mul outPos,			r4,				r5.w
+
+	; outColor = (1.0, 1.0, 1.0, 1.0);
+	mov outColor,		ONES
+
+	; outTcoord = vec2(0.0, 1.0) + (inTcoord (vec2) / texScale (vec2));
+	rcp r6.x,		texScale.x
+	mov r7.xy,		inTcoord.xy
+	rcp r6.y,		texScale.y
+	mad outTcoord,		r6.xy,			r7.xy,			ZERO_ONE.xy
+
+	end
+.end
