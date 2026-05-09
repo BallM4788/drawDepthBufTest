@@ -15,7 +15,7 @@
 		C3D_SyncDisplayTransfer((u32 *)t##Constructed, (u32)GX_BUFFER_DIM(w, h), (u32 *)t##tex.data, (u32)GX_BUFFER_DIM(w, h), 3); \
 		C3D_TexFlush(&t##tex); \
 	} else { \
-		swizzle((u32 *)t##Constructed, (u32 *)t##tex.data, w, h, 0, 0, w, h, 0, 0, w, h, GPU_RGBA8, false, false); \
+		swizzle((u32 *)t##Constructed, 0, 0, w, h, (u32 *)t##tex.data, 0, 0, w, h, w, h, GPU_RGBA8, false, false); \
 	} \
 	linearFree(t##linear);
 
@@ -68,27 +68,27 @@ static void makeTex(const u8 *in, char *out, const u8 *cmap, int w, int h, bool 
 
 void initC3DTexes(void) {
 	CONSTRUCT_TEX(m_s_tile, 32, 32)
-	printf("m_s_tiletex created\n");
+//	printf("m_s_tiletex created\n");
 	CONSTRUCT_TEX(m_s_chest, 128, 128)
-	printf("m_s_chesttex created\n");
+//	printf("m_s_chesttex created\n");
 	CONSTRUCT_TEX(dflt, 32, 32)
-	printf("dflttex created\n");
+//	printf("dflttex created\n");
 	CONSTRUCT_TEX(m_bone, 32, 32)
-	printf("m_bonetex created\n");
+//	printf("m_bonetex created\n");
 	CONSTRUCT_TEX(m_eye, 128, 128)
-	printf("m_eyetex created\n");
+//	printf("m_eyetex created\n");
 	CONSTRUCT_TEX(m_jaw0, 64, 64)
-	printf("m_jaw0tex created\n");
+//	printf("m_jaw0tex created\n");
 	CONSTRUCT_TEX(m_wrist, 8, 8)
-	printf("m_wristtex created\n");
+//	printf("m_wristtex created\n");
 	CONSTRUCT_TEX(m_hand, 64, 64)
-	printf("m_handtex created\n");
+//	printf("m_handtex created\n");
 	CONSTRUCT_TEX(m_finger, 32, 32)
-	printf("m_fingertex created\n");
+//	printf("m_fingertex created\n");
 	CONSTRUCT_TEX(m_s_heel, 128, 64)
-	printf("m_s_heeltex created\n");
+//	printf("m_s_heeltex created\n");
 	CONSTRUCT_TEX(m_s_toe, 128, 64)
-	printf("m_s_toetex created\n");
+//	printf("m_s_toetex created\n");
 }
 
 void deleteC3DTexes(void) {

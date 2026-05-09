@@ -86,6 +86,11 @@
 .fvec  projMatrix[4]		; mat4  projMatrix
 .fvec    texScale			; vec2    texScale
 
+.ivec calcSphereLoopParams
+
+.fvec shadowLight		;  vec3 shadow._light
+.fvec shadowPoint		;  vec3 shadow._point
+.fvec shadowNormal		;  vec3 shadow._normal
 
 ; Outputs
 .out outPos		pos		; gl_Position
@@ -98,9 +103,21 @@
 .alias TMP_1			r1
 .alias TMP_2			r2
 .alias TMP_3			r3
-.alias vec3_L			r9.xyz	;  vec3 l
-.alias flot_D			r9.w	; float d
+.alias TMP_4			r4
+.alias vec4_pos			r5		;  vec4 position
 .alias vec4_posView		r6		;  vec4 positionView
+.alias vec3_shNo		r6.xyz	;  vec3 shadowNormal, moved to temp register
+.alias vec3_shLi		r7.xyz	;  vec3 shadowLight, moved to temp register
+.alias vec3_shPo		r8.xyz	;  vec3 shadowPoint, moved to temp register
+.alias vec3_shNrm		r6.xyz	;  vec3 shadowNormal, moved to temp register
+.alias vec3_shLgt		r7.xyz	;  vec3 shadowLight, moved to temp register
+.alias vec3_shPnt		r8.xyz	;  vec3 shadowPoint, moved to temp register
+.alias dp3_NrmPnt		r9.x
+.alias dp3_NrmLgt		r9.y
+.alias dp3_NrmPos		r9.z
+.alias dp3_LgtPos		r9.w
+.alias vec3_L			r10.xyz	;  vec3 l
+.alias flot_D			r10.w	; float d
 
 
 ; Main
@@ -117,16 +134,70 @@
 	dp4 TMP_1.w,		extraMatrix[3],		TMP_0
 
 	; TMP_2 = modelMatrix (mat4) * extraVec (vec4);
-	dp4 TMP_2.x,		modelMatrix[0],		TMP_1
-	dp4 TMP_2.y,		modelMatrix[1],		TMP_1
-	dp4 TMP_2.z,		modelMatrix[2],		TMP_1
-	dp4 TMP_2.w,		modelMatrix[3],		TMP_1
+	dp4 vec4_pos.x,		modelMatrix[0],		TMP_1
+	dp4 vec4_pos.y,		modelMatrix[1],		TMP_1
+	dp4 vec4_pos.z,		modelMatrix[2],		TMP_1
+	dp4 vec4_pos.w,		modelMatrix[3],		TMP_1
+
+;		mov vec3_shLi,		shadowLight.xyz												; vec3_shLi    = shadowLight(xyz)
+;		mov vec3_shPo,		shadowPoint.xyz												; vec3_shPo    = shadowPoint(xyz)
+;		mov vec3_shNo,		shadowNormal.xyz											; vec3_shNo    = shadowNormal(xyz)
+;
+;		mad vec3_L,			vec4_pos.w,			-vec3_shLi,			vec4_pos.xyz		; vec3_L       = vec4_pos.xyz - (vec4_pos.w * vec3_shLi)
+;		add TMP_0.xyz,		vec3_shPo,			-vec3_shLi								; TMP_0.xyz    = vec3_shPo - vec3_shLi
+;		dp3 TMP_2.w,		vec3_L,				 vec3_shNo								; vec4_pos.w   = dot(vec3_L, vec3_shNo)
+;		dp3 flot_D,			TMP_0.xyz,			 vec3_shNo								; flot_D       = dot(TMP_0.xyz, vec3_shNo)
+;		mul TMP_1.xyz,		TMP_2.w,			 vec3_shLi								; TMP_1.xyz    = vec4_pos.w * vec3_shLi
+;		mov vec4_pos.w,		TMP_2.w
+;		mad vec4_pos.xyz,	vec3_L,				 flot_D,			TMP_1.xyz			; vec4_pos.xyz = (vec4_pos.xyz - (vec4_pos.w * vec3_shLi)) * (dot(vec3_shPo - vec3_shLi, vec3_shNo)) + (vec4_pos.w * vec3_shLi)
+
+		mov vec3_shNrm,		shadowNormal.xyz									; vec3_shNrm   = shadowNormal(xyz)
+		mov vec3_shPnt,		shadowPoint.xyz										; vec3_shPnt   = shadowPoint(xyz)
+		mov vec3_shLgt,		shadowLight.xyz										; vec3_shLgt   = shadowLight(xyz)
+
+		dp3 dp3_NrmPnt,		vec3_shNrm,			vec3_shPnt						; dp3(vec3_shNrm, vec3_shPnt)
+		dp3 dp3_NrmLgt,		vec3_shNrm,			vec3_shLgt						; dp3(vec3_shNrm, vec3_shLgt)
+		dp3 dp3_NrmPos,		vec3_shNrm,			vec4_pos						; dp3(vec3_shNrm, VtxPos.xyz)
+
+		add TMP_0.y,		dp3_NrmPnt,			-dp3_NrmLgt						; dp3_NrmPnt - dp3_NrmLgt
+		mad TMP_0.x,		dp3_NrmPnt,			-vec4_pos.w,		dp3_NrmPos	; dp3_NrmPos - (dp3_NrmPnt * VtxPos.w)
+		mad TMP_0.z,		dp3_NrmLgt,			-vec4_pos.w,		dp3_NrmPos	; dp3_NrmPos - (dp3_NrmLgt * VtxPos.w)
+
+		mul TMP_1.xyz,		vec3_shLgt,			TMP_0.x							; vec3_shLgt (dp3_NrmPos - (dp3_NrmPnt * VtxPos.w))
+		mul TMP_2.xyz,		vec4_pos.xyz,		TMP_0.y							; VtxPos.xyz (dp3_NrmPnt - dp3_NrmLgt)
+
+;		mov vec4_pos.w,		TMP_0.z												; pos.w = dp3_NrmPos - (dp3_NrmLgt * VtxPos.w)
+;		add vec4_pos.xyz,	TMP_1.xyz,			TMP_2.xyz						; pos.xyz = vec3_shLgt (dp3_NrmPos - (VtxPos.w * dp3_NrmPnt)) + VtxPos.xyz (dp3_NrmPnt - dp3_NrmLgt)
+		rcp TMP_0.w,		TMP_0.z
+		add TMP_0.xyz,		TMP_1.xyz,			TMP_2.xyz
+		mov vec4_pos.w,		ONES
+		mul vec4_pos.xyz,	TMP_0.xyz,			TMP_0.w
+
+;		rcp TMP_0.w,		vec4_pos.w
+;		mul vec4_pos,		vec4_pos,			TMP_0.wwww
+;
+;		dp3 dp3_NrmPnt,		vec3_shNrm,			vec3_shPnt
+;		dp3 dp3_NrmLgt,		vec3_shNrm,			vec3_shLgt
+;		dp3 dp3_NrmPos,		vec3_shNrm,			vec4_pos.xyz
+;
+;		add TMP_0.x,		dp3_NrmPnt,			-dp3_NrmLgt
+;		add TMP_0.y,		dp3_NrmPos,			-dp3_NrmLgt
+;		rcp TMP_0.y,		TMP_0.y
+;		mul flot_D,			TMP_0.x,			TMP_0.y
+;
+;		add TMP_0.x,		ONES,				-flot_D
+;
+;		mul TMP_1.xyz,		vec4_pos.xyz,		flot_D
+;		mov vec4_pos.w,		ONES
+;		mad vec4_pos.xyz,	vec3_shLgt,			TMP_0.xxx,			TMP_1.xyz
+
+
 
 	; TMP_3 = viewMatrix (mat4) * TMP_2
-	dp4 TMP_3.x,		viewMatrix[0],		TMP_2
-	dp4 TMP_3.y,		viewMatrix[1],		TMP_2
-	dp4 TMP_3.z,		viewMatrix[2],		TMP_2
-	dp4 TMP_3.w,		viewMatrix[3],		TMP_2
+	dp4 TMP_3.x,		viewMatrix[0],		vec4_pos
+	dp4 TMP_3.y,		viewMatrix[1],		vec4_pos
+	dp4 TMP_3.z,		viewMatrix[2],		vec4_pos
+	dp4 TMP_3.w,		viewMatrix[3],		vec4_pos
 
 	; outPos = projMatrix * positionView;
 	; dp4 outPos.x,		projMatrix[0],		TMP_3

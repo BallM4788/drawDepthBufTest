@@ -101,13 +101,13 @@ static void exitOuter(void) {
 
 static DVLB_s							*inner_vxcolor_dvlb;
 static shaderProgram_s					 inner_vxcolor_program;
-static int								 inner_vxcolor_uLoc_zPosition;
+static int							 inner_vxcolor_uLoc_zPosition;
        float							 inner_vxcolor_flt_zPosition;
        float							 inner_vxcolor_flt_zInterval;
 static C3D_AttrInfo						 inner_vxcolor_attrInfo;
 static C3D_BufInfo						 inner_vxcolor_bufInfo;
 static C3D_TexEnv						 inner_vxcolor_texEnv;
-static void								*inner_vxcolor_VBO;
+static void							*inner_vxcolor_VBO;
 
 static void inner_vxcolor_init(void) {
 	// load shader, create program
@@ -154,14 +154,14 @@ static void inner_vxcolor_init(void) {
 
 static DVLB_s							*inner_texture_dvlb;
 static shaderProgram_s					 inner_texture_program;
-static int								 inner_texture_uLoc_texcrop,
-										 inner_texture_uLoc_scale,
-										 inner_texture_uLoc_offset;
+static int							 inner_texture_uLoc_texcrop,
+								 inner_texture_uLoc_scale,
+								 inner_texture_uLoc_offset;
 static C3D_AttrInfo						 inner_texture_attrInfo;
 static C3D_BufInfo						 inner_texture_bufInfo;
 static C3D_TexEnv						 inner_texture_texEnv;
-static void								*inner_texture_VBO;
-static void								*whiteRectangle;
+static void							*inner_texture_VBO;
+static void							*whiteRectangle;
 
 static void inner_texture_init(void) {
 	// load shader, create program
@@ -209,7 +209,7 @@ static void inner_texture_init(void) {
 
 static void								*inner_depthSwizzled;
 static void								*inner_EBO;
-static C3D_Tex							 inner_C3DTex;
+static C3D_Tex							 background_C3DTex;
 static C3D_Tex							 tube_can_C3DTex;
 static u32								 background_depthAdjusted[BACKGROUND_DEPTH_LENGTH];
 static u32								 tube_can_depthAdjusted[TUBE_CAN_DEPTH_LENGTH];
@@ -217,13 +217,12 @@ static u32								 tube_can_depthAdjusted[TUBE_CAN_DEPTH_LENGTH];
 static void adjustDepths(unsigned char *vals, int length, u32 *valsAdjusted) {
 	u16 *valsPtr = (u16 *)vals;
 	for (int i = 0; i < length; i++) {
-		u32 val = (u32)((float)valsPtr[i] / 0xffff * 0xffffff);
-		if (val == 0xf81ff7) {
+		u32 val = valsPtr[i];
+		// fix the value if it is incorrectly set to the bitmap transparency color
+		if (val == 0xf81f) {
 			val = 0;
 		}
-		//valsAdjusted[i] = 0xFFFFFF - val;
-		//scummvm compresses the depth values in the grim engine's opengl renderers, not sure if it'll be needed then
-		valsAdjusted[i] = 0xffffff - ((u64)val) * 0x1000000 / 100 / (0x1000000 - val);
+		valsAdjusted[i] = (0xffff - val * 0x10000 / 100 / (0x10000 - val)) << 8;
 	}
 }
 
@@ -238,25 +237,56 @@ static void initInner(void) {
 	eboShort[2] = eboShort[4] = 2;
 	eboShort[5] = 3;
 	// create background texture
-	C3D_TexInit(&inner_C3DTex, 1024, 512, GPU_RGBA8);
+	C3D_TexInit(&background_C3DTex, 1024, 512, GPU_RGBA8);
 	C3D_TexInit(&tube_can_C3DTex, 512, 256, GPU_RGBA8);
 	// swizzle values into texture; can't use tex3ds to textures
-	unsigned char background_color[] = { BACKGROUND_COLOR };
-	unsigned char tube_can_color[] = { TUBE_CAN_COLOR };
-	swizzle((u32 *)background_color, (u32 *)inner_C3DTex.data, BACKGROUND_COLOR_WIDTH, BACKGROUND_COLOR_HEIGHT,
-		0, 0, BACKGROUND_COLOR_WIDTH, BACKGROUND_COLOR_HEIGHT,
-		0, 0, 1024, 512,
-		GPU_RGBA8, false, false);
-	swizzle((u32 *)tube_can_color, (u32 *)tube_can_C3DTex.data, TUBE_CAN_COLOR_WIDTH, TUBE_CAN_COLOR_HEIGHT,
-		0, 0, TUBE_CAN_COLOR_WIDTH, TUBE_CAN_COLOR_HEIGHT,
-		0, 0, 512, 256,
-		GPU_RGBA8, false, false);
-	C3D_TexSetFilter(&inner_C3DTex, GPU_NEAREST, GPU_NEAREST);
-	C3D_TexSetWrap(&inner_C3DTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+	u32 startTime = svcGetSystemTick() / 268123;
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	//unsigned char background_color[] = { BACKGROUND_COLOR };
+	//swizzle((u32 *)background_color, (u32 *)background_C3DTex.data, BACKGROUND_COLOR_WIDTH, BACKGROUND_COLOR_HEIGHT,
+	//	0, 0, BACKGROUND_COLOR_WIDTH, BACKGROUND_COLOR_HEIGHT,
+	//	0, 0, 1024, 512,
+	//	GPU_RGBA8, false, false);
+	unsigned char background_color_vals[] = { BACKGROUND_COLOR };
+	u32 *background_color_vals32 = (u32 *)background_color_vals;
+	u32 *background_color = (u32 *)linearAlloc(1024 * 512 * 4);
+	for (int j = 0; j < BACKGROUND_COLOR_HEIGHT; j++) {
+		for (int i = 0; i < BACKGROUND_COLOR_WIDTH; i++) {
+			background_color[1024 * j + i] = __builtin_bswap32(background_color_vals32[BACKGROUND_COLOR_WIDTH * j + i]);
+		}
+	}
+	GSPGPU_FlushDataCache(background_color, 1024 * 512 * 4);
+	C3D_SyncDisplayTransfer((u32 *)background_color, GX_BUFFER_DIM(1024, 512),
+	                        (u32 *)background_C3DTex.data, GX_BUFFER_DIM(1024, 512), 3);
+	linearFree(background_color);
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	//unsigned char tube_can_color[] = { TUBE_CAN_COLOR };
+	//swizzle((u32 *)tube_can_color, (u32 *)tube_can_C3DTex.data, TUBE_CAN_COLOR_WIDTH, TUBE_CAN_COLOR_HEIGHT,
+	//	0, 0, TUBE_CAN_COLOR_WIDTH, TUBE_CAN_COLOR_HEIGHT,
+	//	0, 0, 512, 256,
+	//	GPU_RGBA8, false, false);
+	unsigned char tube_can_color_vals[] = { TUBE_CAN_COLOR };
+	u32 *tube_can_color_vals32 = (u32 *)tube_can_color_vals;
+	u32 *tube_can_color = (u32 *)linearAlloc(512 * 256 * 4);
+	for (int j = 0; j < TUBE_CAN_COLOR_HEIGHT; j++) {
+		for (int i = 0; i < TUBE_CAN_COLOR_WIDTH; i++) {
+			tube_can_color[512 * j + i] = __builtin_bswap32(tube_can_color_vals32[TUBE_CAN_COLOR_WIDTH * j + i]);
+		}
+	}
+	GSPGPU_FlushDataCache(tube_can_color, 512 * 256 * 4);
+	C3D_SyncDisplayTransfer((u32 *)tube_can_color, GX_BUFFER_DIM(512, 256),
+	                        (u32 *)tube_can_C3DTex.data, GX_BUFFER_DIM(512, 256), 3);
+	linearFree(tube_can_color);
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	u32 endTime = svcGetSystemTick() / 268123;
+	printf("%ld\n", endTime - startTime);
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	C3D_TexSetFilter(&background_C3DTex, GPU_NEAREST, GPU_NEAREST);
+	C3D_TexSetWrap(&background_C3DTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
 	C3D_TexSetFilter(&tube_can_C3DTex, GPU_NEAREST, GPU_NEAREST);
 	C3D_TexSetWrap(&tube_can_C3DTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
 
-	inner_depthSwizzled = linearAlloc(1024 * 512 * sizeof(u32));
+	inner_depthSwizzled = linearMemAlign(1024 * 512 * 4, 0x4);
 
 	unsigned char background_depth[] = { BACKGROUND_DEPTH };
 	unsigned char tube_can_depth[] = { TUBE_CAN_DEPTH };
@@ -279,7 +309,7 @@ static void initInner(void) {
 static void exitInner(void) {
 	linearFree(inner_depthSwizzled);
 	C3D_TexDelete(&tube_can_C3DTex);
-	C3D_TexDelete(&inner_C3DTex);
+	C3D_TexDelete(&background_C3DTex);
 	linearFree(inner_EBO);
 
 	linearFree(inner_texture_VBO);
@@ -300,7 +330,10 @@ static int							 manny_uLoc_modelMatrix,
 								 manny_uLoc_viewMatrix,
 								 manny_uLoc_projMatrix,
 								 manny_uLoc_extraMatrix,
-								 manny_uLoc_texScale;
+								 manny_uLoc_texScale,
+								 manny_uLoc_shadowLight,
+								 manny_uLoc_shadowPoint,
+								 manny_uLoc_shadowNormal;
 static C3D_Mtx						 manny_mtx_extraMatrix,
 								 manny_mtx_modelMatrix,
 								 manny_mtx_viewMatrix,
@@ -309,7 +342,6 @@ static C3D_FVec						 manny_vec_texScale;
 static C3D_AttrInfo						 manny_attrInfo;
 static C3D_BufInfo						 manny_bufInfo;
 static C3D_TexEnv						 manny_texEnv;
-//static C3D_Tex						 manny_texture;
 static void							*manny_VBO;
 
 static void constructMannyMatrices(void) 
@@ -321,14 +353,14 @@ static void constructMannyMatrices(void)
 	// manny tube pos:  0.741680026, 2.09709001, 0
 	// manny tube rot:  0, 11.3445997, 0
 	
-	C3D_FVec posVec = FVec3_New(0.741680026f, 2.09709001f, 0.f);		// tube
-	//C3D_FVec posVec = FVec3_New(1.32737005f, 1.59880996f, 0.f);		// start
+	//C3D_FVec posVec = FVec3_New(0.741680026f, 2.09709001f, 0.f);		// tube
+	C3D_FVec posVec = FVec3_New(1.32737005f, 1.59880996f, 0.f);		// start
 
 	// actor rotation into actorRotQuat
 	C3D_Mtx actorRotMtx;
 	Mtx_Identity(&actorRotMtx);
-	Mtx_RotateZ(&actorRotMtx, C3D_AngleFromDegrees(11.3445997f), true);	// tube
-	//Mtx_RotateZ(&actorRotMtx, C3D_AngleFromDegrees(50.3818016f), true);	// start
+	//Mtx_RotateZ(&actorRotMtx, C3D_AngleFromDegrees(11.3445997f), true);	// tube
+	Mtx_RotateZ(&actorRotMtx, C3D_AngleFromDegrees(50.3818016f), true);	// start
 	C3D_FQuat actorRotQuat = Quat_Inverse(Quat_FromMtx(&actorRotMtx));
 	Mtx_FromQuat(&manny_mtx_modelMatrix, actorRotQuat);
 	Mtx_Transpose(&manny_mtx_modelMatrix);
@@ -466,18 +498,40 @@ static void constructMannyMatrices(void)
 	C3D_Mtx matrixStackTop, nodeDotAnimRotMtx, pivotMtx;
 	Mtx_Identity(&matrixStackTop);
 	Mtx_Translate(&matrixStackTop, nodeDotAnimPos.x, nodeDotAnimPos.y, nodeDotAnimPos.z, true);
+//	printf("nodeDotAnimPos (1st, translateViewpoint)\n");
+//	for (int i = 0; i < 4; i++) {
+//		printf("%f %f %f %f\n", matrixStackTop.r[i].x, matrixStackTop.r[i].y, matrixStackTop.r[i].z, matrixStackTop.r[i].w);
+//	}
 
 	Mtx_FromQuat(&nodeDotAnimRotMtx, nodeDotAnimRot);
+//	printf("nodeDotAnimRotMtx (second, rotateViewpoint)\n");
+//	for (int i = 0; i < 4; i++) {
+//		printf("%f %f %f %f\n", nodeDotAnimRotMtx.r[i].x, nodeDotAnimRotMtx.r[i].y, nodeDotAnimRotMtx.r[i].z, nodeDotAnimRotMtx.r[i].w);
+//	}
 	Mtx_Multiply(&matrixStackTop, &matrixStackTop, &nodeDotAnimRotMtx);
 
 	Mtx_Identity(&pivotMtx);
 	Mtx_Translate(&pivotMtx, nodePivot.x, nodePivot.y, nodePivot.z, true);
+//	printf("pivotMtx (last, translateViewpoint)\n");
+//	for (int i = 0; i < 4; i++) {
+//		printf("%f %f %f %f\n", pivotMtx.r[i].x, pivotMtx.r[i].y, pivotMtx.r[i].z, pivotMtx.r[i].w);
+//	}
 	Mtx_Multiply(&manny_mtx_extraMatrix, &matrixStackTop, &pivotMtx);
+//	printf("manny_mtx_extraMatrix\n");
+//	for (int i = 0; i < 4; i++) {
+//		printf("%f %f %f %f\n", manny_mtx_extraMatrix.r[i].x, manny_mtx_extraMatrix.r[i].y, manny_mtx_extraMatrix.r[i].z, manny_mtx_extraMatrix.r[i].w);
+//	}
+	//  0.996796 0.079132 -0.011695  0.007626
+	// -0.079216 0.996834 -0.006893 -0.013232
+	//  0.011113 0.007797  0.999908  0.152443
+	//  0.000000 0.000000  0.000000  1.000000
+
 }
 
 static void initManny(void) {
 	// load shader, create program
 	manny_dvlb = DVLB_ParseFile((u32 *)manny_shbin, manny_shbin_size);
+
 	shaderProgramInit(&manny_program);
 	shaderProgramSetVsh(&manny_program, &manny_dvlb->DVLE[0]);
 
@@ -487,6 +541,9 @@ static void initManny(void) {
 	manny_uLoc_viewMatrix = shaderInstanceGetUniformLocation(manny_program.vertexShader, "viewMatrix");
 	manny_uLoc_projMatrix = shaderInstanceGetUniformLocation(manny_program.vertexShader, "projMatrix");
 	manny_uLoc_texScale = shaderInstanceGetUniformLocation(manny_program.vertexShader, "texScale");
+	manny_uLoc_shadowLight = shaderInstanceGetUniformLocation(manny_program.vertexShader, "shadowLight");
+	manny_uLoc_shadowPoint = shaderInstanceGetUniformLocation(manny_program.vertexShader, "shadowPoint");
+	manny_uLoc_shadowNormal = shaderInstanceGetUniformLocation(manny_program.vertexShader, "shadowNormal");
 
 	// set matrices
 	constructMannyMatrices();
@@ -553,22 +610,22 @@ int main() {
 	initInner();
 
 	initManny();
-	printf("manny_mtx_extraMatrix\n");
-	for (int i = 0; i < 4; i++) {
-		printf("%f %f %f %f\n", manny_mtx_extraMatrix.r[i].x, manny_mtx_extraMatrix.r[i].y, manny_mtx_extraMatrix.r[i].z, manny_mtx_extraMatrix.r[i].w);
-	}
-	printf("manny_mtx_modelMatrix\n");
-	for (int i = 0; i < 4; i++) {
-		printf("%f %f %f %f\n", manny_mtx_modelMatrix.r[i].x, manny_mtx_modelMatrix.r[i].y, manny_mtx_modelMatrix.r[i].z, manny_mtx_modelMatrix.r[i].w);
-	}
-	printf("manny_mtx_viewMatrix\n");
-	for (int i = 0; i < 4; i++) {
-		printf("%f %f %f %f\n", manny_mtx_viewMatrix.r[i].x, manny_mtx_viewMatrix.r[i].y, manny_mtx_viewMatrix.r[i].z, manny_mtx_viewMatrix.r[i].w);
-	}
-	printf("manny_mtx_projMatrix\n");
-	for (int i = 0; i < 4; i++) {
-		printf("%f %f %f %f\n", manny_mtx_projMatrix.r[i].x, manny_mtx_projMatrix.r[i].y, manny_mtx_projMatrix.r[i].z, manny_mtx_projMatrix.r[i].w);
-	}
+//	printf("manny_mtx_extraMatrix\n");
+//	for (int i = 0; i < 4; i++) {
+//		printf("%f %f %f %f\n", manny_mtx_extraMatrix.r[i].x, manny_mtx_extraMatrix.r[i].y, manny_mtx_extraMatrix.r[i].z, manny_mtx_extraMatrix.r[i].w);
+//	}
+//	printf("manny_mtx_modelMatrix\n");
+//	for (int i = 0; i < 4; i++) {
+//		printf("%f %f %f %f\n", manny_mtx_modelMatrix.r[i].x, manny_mtx_modelMatrix.r[i].y, manny_mtx_modelMatrix.r[i].z, manny_mtx_modelMatrix.r[i].w);
+//	}
+//	printf("manny_mtx_viewMatrix\n");
+//	for (int i = 0; i < 4; i++) {
+//		printf("%f %f %f %f\n", manny_mtx_viewMatrix.r[i].x, manny_mtx_viewMatrix.r[i].y, manny_mtx_viewMatrix.r[i].z, manny_mtx_viewMatrix.r[i].w);
+//	}
+//	printf("manny_mtx_projMatrix\n");
+//	for (int i = 0; i < 4; i++) {
+//		printf("%f %f %f %f\n", manny_mtx_projMatrix.r[i].x, manny_mtx_projMatrix.r[i].y, manny_mtx_projMatrix.r[i].z, manny_mtx_projMatrix.r[i].w);
+//	}
 
 	// apply needed effects that are different from citro3d's starting effects
 	C3D_CullFace(GPU_CULL_NONE);
@@ -599,17 +656,37 @@ int main() {
 			}
 		}
 
+		// draw frame clear
+		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+			C3D_FrameDrawOn(inner_renderTarget);
+			C3D_SetViewport(0, 0, 640, 480);
+			C3D_SetTexEnv(0, &inner_vxcolor_texEnv);
+			// blend disabled
+			C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+			// Disable stencil test
+			C3D_StencilTest(false, GPU_ALWAYS, 0x00, 0xFF, 0xFF);
+			// Enable depth testing; Always write to depth buffer; Enable writing to depth buffer
+			C3D_DepthTest(true, GPU_ALWAYS, GPU_WRITE_ALL);
+			// Unbind textures
+			C3D_TexBind(0, NULL);
 
-		C3D_RenderTargetClear(inner_renderTarget, C3D_CLEAR_ALL, 0x00000000, 0x00FFFFFF);
+			C3D_BindProgram(&inner_vxcolor_program);
+			C3D_SetAttrInfo(&inner_vxcolor_attrInfo);
+			C3D_SetBufInfo(&inner_vxcolor_bufInfo);
+			C3D_FVUnifSet(GPU_VERTEX_SHADER, inner_vxcolor_uLoc_zPosition, 1.0f, 0.f, 0.f, 0.f);
+			C3D_FixedAttribSet(1, 0.0, 0.0, 0.0, 0.0);
+			C3D_DrawElements(GPU_TRIANGLES, 6, C3D_UNSIGNED_SHORT, inner_EBO);
+
+			C3D_DepthTest(false, GPU_LESS, GPU_WRITE_ALL);
+		C3D_FrameEnd(0);
 
 		C3D_DepthMap(true, 1.0f, 1.0f);
 
 		// swizzle background depths into inner_depthSwizzled, DMA inner_depthSwizzled into depth buffer
-		swizzle(background_depthAdjusted, (u32 *)inner_depthSwizzled, BACKGROUND_DEPTH_WIDTH, BACKGROUND_DEPTH_HEIGHT,
-			0, 0, BACKGROUND_DEPTH_WIDTH, BACKGROUND_DEPTH_HEIGHT,
-			BACKGROUND_DEPTH_OFFX, BACKGROUND_DEPTH_OFFY, 1024, 512,
-			GPU_RGBA8, false, true);
-		GX_RequestDma((u32 *)inner_depthSwizzled, (u32 *)inner_renderTarget->frameBuf.depthBuf, 1024 * 512 * sizeof(u32));
+		swizzle(background_depthAdjusted,                      0,                     0, BACKGROUND_DEPTH_WIDTH, BACKGROUND_DEPTH_HEIGHT,
+			(u32 *)inner_depthSwizzled, BACKGROUND_DEPTH_OFFX, BACKGROUND_DEPTH_OFFY,                   1024,                     512,
+			BACKGROUND_DEPTH_WIDTH, BACKGROUND_DEPTH_HEIGHT, GPU_RGBA8, false, true);
+//		GX_RequestDma((u32 *)inner_depthSwizzled, (u32 *)inner_renderTarget->frameBuf.depthBuf, 1024 * 512 * sizeof(u32));
 
 		// draw background
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
@@ -627,7 +704,7 @@ int main() {
 			C3D_FVUnifSet(GPU_VERTEX_SHADER, inner_texture_uLoc_texcrop, 0.625f, 0.9375f, 0.f, 0.f);
 			C3D_FVUnifSet(GPU_VERTEX_SHADER, inner_texture_uLoc_scale, 1.f, 1.f, 0.f, 0.f);
 			C3D_FVUnifSet(GPU_VERTEX_SHADER, inner_texture_uLoc_offset, 0.f, 0.f, 0.f, 0.f);
-			C3D_TexBind(0, &inner_C3DTex);
+			C3D_TexBind(0, &background_C3DTex);
 			C3D_DrawElements(GPU_TRIANGLES, 6, C3D_UNSIGNED_SHORT, inner_EBO);
 			// blend disabled
 			C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
@@ -635,36 +712,37 @@ int main() {
 			C3D_DepthTest(true, GPU_LESS, GPU_WRITE_ALL);
 		C3D_FrameEnd(0);
 
-		// draw tube can
-		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
-			C3D_FrameDrawOn(inner_renderTarget);
-			C3D_SetViewport(0, 0, 640, 480);
-			C3D_SetTexEnv(0, &inner_texture_texEnv);
-			// blend enabled, sfactor = GPU_SRC_ALPHA, dfactor = GPU_ONE_MINUS_SRC_ALPHA
-			C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
-			// depth test disabled, depth func = LESS, depth mask disabled
-			C3D_DepthTest(false, GPU_LESS, GPU_WRITE_COLOR);
-
-			C3D_BindProgram(&inner_texture_program);
-			C3D_SetAttrInfo(&inner_texture_attrInfo);
-			C3D_SetBufInfo(&inner_texture_bufInfo);
-			C3D_FVUnifSet(GPU_VERTEX_SHADER, inner_texture_uLoc_texcrop, TUBE_CAN_COLOR_WIDTH / 512.f, TUBE_CAN_COLOR_HEIGHT / 256.f, 0.f, 0.f);
-			C3D_FVUnifSet(GPU_VERTEX_SHADER, inner_texture_uLoc_scale, TUBE_CAN_COLOR_WIDTH / 640.f, TUBE_CAN_COLOR_HEIGHT / 480.f, 0.f, 0.f);
-			C3D_FVUnifSet(GPU_VERTEX_SHADER, inner_texture_uLoc_offset, TUBE_CAN_COLOR_OFFX / 640.f, TUBE_CAN_COLOR_OFFY / 480.f, 0.f, 0.f);
-			C3D_TexBind(0, &tube_can_C3DTex);
-			C3D_DrawElements(GPU_TRIANGLES, 6, C3D_UNSIGNED_SHORT, inner_EBO);
-			// blend disabled
-			C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
-			// depth test enabled, depth func = LESS, depth mask enabled
-			C3D_DepthTest(true, GPU_LESS, GPU_WRITE_ALL);
-		C3D_FrameEnd(0);
-
-		// swizzle tube can depths into inner_depthSwizzled, DMA inner_depthSwizzled into depth buffer
-		swizzle(tube_can_depthAdjusted, (u32 *)inner_depthSwizzled, TUBE_CAN_DEPTH_WIDTH, TUBE_CAN_DEPTH_HEIGHT,
-			0, 0, TUBE_CAN_DEPTH_WIDTH, TUBE_CAN_DEPTH_HEIGHT,
-			TUBE_CAN_DEPTH_OFFX, TUBE_CAN_DEPTH_OFFY, 1024, 512,
-			GPU_RGBA8, false, true);
+//		// draw tube can
+//		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+//			C3D_FrameDrawOn(inner_renderTarget);
+//			C3D_SetViewport(0, 0, 640, 480);
+//			C3D_SetTexEnv(0, &inner_texture_texEnv);
+//			// blend enabled, sfactor = GPU_SRC_ALPHA, dfactor = GPU_ONE_MINUS_SRC_ALPHA
+//			C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+//			// depth test disabled, depth func = LESS, depth mask disabled
+//			C3D_DepthTest(false, GPU_LESS, GPU_WRITE_COLOR);
+//
+//			C3D_BindProgram(&inner_texture_program);
+//			C3D_SetAttrInfo(&inner_texture_attrInfo);
+//			C3D_SetBufInfo(&inner_texture_bufInfo);
+//			C3D_FVUnifSet(GPU_VERTEX_SHADER, inner_texture_uLoc_texcrop, TUBE_CAN_COLOR_WIDTH / 512.f, TUBE_CAN_COLOR_HEIGHT / 256.f, 0.f, 0.f);
+//			C3D_FVUnifSet(GPU_VERTEX_SHADER, inner_texture_uLoc_scale, TUBE_CAN_COLOR_WIDTH / 640.f, TUBE_CAN_COLOR_HEIGHT / 480.f, 0.f, 0.f);
+//			C3D_FVUnifSet(GPU_VERTEX_SHADER, inner_texture_uLoc_offset, TUBE_CAN_COLOR_OFFX / 640.f, TUBE_CAN_COLOR_OFFY / 480.f, 0.f, 0.f);
+//			C3D_TexBind(0, &tube_can_C3DTex);
+//			C3D_DrawElements(GPU_TRIANGLES, 6, C3D_UNSIGNED_SHORT, inner_EBO);
+//			// blend disabled
+//			C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+//			// depth test enabled, depth func = LESS, depth mask enabled
+//			C3D_DepthTest(true, GPU_LESS, GPU_WRITE_ALL);
+//		C3D_FrameEnd(0);
+//
+//		// swizzle tube can depths into inner_depthSwizzled, DMA inner_depthSwizzled into depth buffer
+//		swizzle(tube_can_depthAdjusted,                      0,                   0, TUBE_CAN_DEPTH_WIDTH, TUBE_CAN_DEPTH_HEIGHT,
+//			(u32 *)inner_depthSwizzled, TUBE_CAN_DEPTH_OFFX, TUBE_CAN_DEPTH_OFFY,                 1024,                   512,
+//			TUBE_CAN_DEPTH_WIDTH, TUBE_CAN_DEPTH_HEIGHT, GPU_RGBA8, false, true);
+		GSPGPU_FlushDataCache(inner_depthSwizzled, 1024 * 512 * 4);
 		GX_RequestDma((u32 *)inner_depthSwizzled, (u32 *)inner_renderTarget->frameBuf.depthBuf, 1024 * 512 * sizeof(u32));
+		gspWaitForAnyEvent();
 
 		// draw manny skirt
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
@@ -676,7 +754,6 @@ int main() {
 			// alpha test enabled, alpha func = GPU_GREATER, ref value is 0.5f -> 128
 			C3D_AlphaTest(true, GPU_GREATER, 128);
 
-
 			C3D_BindProgram(&manny_program);
 			C3D_SetAttrInfo(&manny_attrInfo);
 			C3D_SetBufInfo(&manny_bufInfo);
@@ -685,8 +762,15 @@ int main() {
 			C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, manny_uLoc_viewMatrix, &manny_mtx_viewMatrix);
 			C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, manny_uLoc_projMatrix, &manny_mtx_projMatrix);
 			C3D_FVUnifSet(GPU_VERTEX_SHADER, manny_uLoc_texScale, 32.0f, 32.0f, 0.0f, 0.0f);
+			C3D_FVUnifSet(GPU_VERTEX_SHADER, manny_uLoc_shadowLight, 1000.f, 4000.f, 6000.f, 0.f);
+			C3D_FVUnifSet(GPU_VERTEX_SHADER, manny_uLoc_shadowPoint, 0.7607f, 0.5244f, 0.01, 0.f);
+//			C3D_FVUnifSet(GPU_VERTEX_SHADER, manny_uLoc_shadowLight, -100.f, -1400.f, 6000.f, 0.f);
+//			C3D_FVUnifSet(GPU_VERTEX_SHADER, manny_uLoc_shadowPoint, 1.3234f, 0.9273f, 0.01, 0.f);
+			C3D_FVUnifSet(GPU_VERTEX_SHADER, manny_uLoc_shadowNormal, 0.f, -0.f, -1.f, 0.f);
 			C3D_TexBind(0, &m_s_tiletex);
-			//TODO: IN SCUMMVM, MAKE SURE BACKGROUND DEPTHS ARE DRAWN BEFORE ACTORS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+			C3D_DrawArrays(GPU_TRIANGLES, 0, 102);
+			C3D_FVUnifSet(GPU_VERTEX_SHADER, manny_uLoc_shadowLight, -100.f, -1400.f, 6000.f, 0.f);
+			C3D_FVUnifSet(GPU_VERTEX_SHADER, manny_uLoc_shadowPoint, 1.3234f, 0.9273f, 0.01, 0.f);
 			C3D_DrawArrays(GPU_TRIANGLES, 0, 102);
 			// alpha test disabled, alpha func = GPU_GREATER, ref value is 0.5f -> 128
 			C3D_AlphaTest(false, GPU_GREATER, 128);
@@ -713,6 +797,7 @@ int main() {
 
 		// draw to screen
 		C3D_DepthMap(true, -1.0f, 0.0f);
+		//printf("draw to screen\n");
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 			C3D_FrameDrawOn(outer_renderTarget);
 			C3D_RenderTargetClear(outer_renderTarget, C3D_CLEAR_ALL, /*RGB, no A in target*/ 0x000000, 0);
@@ -728,6 +813,7 @@ int main() {
 			C3D_TexBind(0, &outer_texture);
 			C3D_DrawArrays(GPU_TRIANGLE_STRIP, 0, 4);
 		C3D_FrameEnd(0);
+		//printf("screen drawn\n");
 
 	}
 

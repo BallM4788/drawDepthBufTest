@@ -40,31 +40,31 @@ static u32 mortonOffset(u32 x, u32 y) {
 	return (i + offset);
 }
 
-static void swizzle(u32 *srcBuf, u32 *dstBuf, int copyWidth, int copyHeight,
-             int xSource, int ySource, int wSource,   int hSource,
-             int xDest,   int yDest,   int wDest,     int hDest,
-             GPU_TEXCOLOR format, bool isBlockSrc, bool isDepthTex) {
+static void swizzle(u32 *srcBuf, int xSrc, int ySrc, int wSrc, int hSrc,
+                    u32 *dstBuf, int xDst, int yDst, int wDst, int hDst,
+                    int copyWidth, int copyHeight, GPU_TEXCOLOR format, bool isBlockSrc, bool isDepthTex) {
+
 	u32 pixSize = 4, halfByte = 0;
 	int yFlip   = !isBlockSrc;
 
 	pixSize = getPixelSizeInBytes(format, &halfByte);
 
-	u32 wSrc = wSource;
-	u32 hSrc = hSource;
-	u32 wDst = wDest;
-	u32 hDst = hDest;
+	u32 wSrc32 = wSrc;
+	u32 hSrc32 = hSrc;
+	u32 wDst32 = wDst;
+	u32 hDst32 = hDst;
 	u32 copyW = copyWidth;
 	u32 copyH = copyHeight;
-	u32 ySrc = ySource;
-	u32 xSrc = xSource;
-	u32 yDst = yDest;
-	u32 xDst = xDest;
+	u32 ySrc32 = ySrc;
+	u32 xSrc32 = xSrc;
+	u32 yDst32 = yDst;
+	u32 xDst32 = xDst;
 	u32 x, y;
 	u8 *srcConverted;
 
 	if (!isBlockSrc && !isDepthTex) {
 		int idx;
-		int size = wSource * hSource * pixSize;
+		int size = wSrc * hSrc * pixSize;
 		if (halfByte) size /= 2;
 
 		srcConverted = (u8 *)linearAlloc((size_t)size);
@@ -73,7 +73,7 @@ static void swizzle(u32 *srcBuf, u32 *dstBuf, int copyWidth, int copyHeight,
 		u16 *srcBuf16;
 		switch (format) {
 			case GPU_RGBA8:
-				for (idx = 0; idx < wSource * hSource; idx++) {
+				for (idx = 0; idx < wSrc * hSrc; idx++) {
 					((u32 *)srcConverted)[idx] = (((srcBuf[idx] << 24) & 0xff000000) |
 					                              ((srcBuf[idx] << 8)  & 0x00ff0000) |
 					                              ((srcBuf[idx] >> 8)  & 0x0000ff00) |
@@ -81,7 +81,7 @@ static void swizzle(u32 *srcBuf, u32 *dstBuf, int copyWidth, int copyHeight,
 				}
 				break;
 			case GPU_RGB8:
-				for (idx = 0; idx < wSource * hSource; idx++) {
+				for (idx = 0; idx < wSrc * hSrc; idx++) {
 					int pxl = idx * 3;
 					srcConverted[pxl + 2] = ((u8 *)srcBuf)[pxl + 0];
 					srcConverted[pxl + 1] = ((u8 *)srcBuf)[pxl + 1];
@@ -91,7 +91,7 @@ static void swizzle(u32 *srcBuf, u32 *dstBuf, int copyWidth, int copyHeight,
 			case GPU_LA8:
 			case GPU_HILO8:
 				srcBuf16 = (u16 *)srcBuf;
-				for (idx = 0; idx < wSource * hSource; idx++) {
+				for (idx = 0; idx < wSrc * hSrc; idx++) {
 					((u16 *)srcConverted)[idx] = (((srcBuf16[idx] << 8) & 0xff00) |
 					                              ((srcBuf16[idx] >> 8) & 0x00ff));
 				}
@@ -99,18 +99,18 @@ static void swizzle(u32 *srcBuf, u32 *dstBuf, int copyWidth, int copyHeight,
 			case GPU_RGB565:
 			case GPU_RGBA5551:
 			case GPU_RGBA4:
-				for (idx = 0; idx < wSource * hSource; idx++)
+				for (idx = 0; idx < wSrc * hSrc; idx++)
 					((u16 *)srcConverted)[idx] = ((u16 *)srcBuf)[idx];
 				break;
 			case GPU_A8:
 			case GPU_L8:
 			case GPU_LA4:
-				for (idx = 0; idx < wSource * hSource; idx++)
+				for (idx = 0; idx < wSrc * hSrc; idx++)
 					srcConverted[idx] = ((u8 *)srcBuf)[idx];
 				break;
 			case GPU_L4:
 			case GPU_A4:
-				for (idx = 0; idx < wSource * hSource / 2; idx++)
+				for (idx = 0; idx < wSrc * hSrc / 2; idx++)
 					srcConverted[idx] = ((u8 *)srcBuf)[idx];
 				break;
 			case GPU_ETC1:
@@ -122,22 +122,22 @@ static void swizzle(u32 *srcBuf, u32 *dstBuf, int copyWidth, int copyHeight,
 		srcConverted = (u8 *)srcBuf;
 
 	for (y = 0; y < copyH; y++) {
-		u32 yOffSrc = (yFlip) ? ySrc + y : hSrc - 1 - (ySrc + y);
+		u32 yOffSrc = (yFlip) ? ySrc32 + y : hSrc32 - 1 - (ySrc32 + y);
 		u32 yOffSrcCoarse = yOffSrc & ~7;
 
-		u32 yOffDst = hDst - 1 - (yDst + y);
+		u32 yOffDst = hDst32 - 1 - (yDst32 + y);
 		u32 yOffDstCoarse = yOffDst & ~7;
 
 		for (x = 0; x < copyW; x++) {
-			u32 xOffDst = x + xDst;
-			u32 offset = mortonOffset(xOffDst, yOffDst) + yOffDstCoarse * wDst;
+			u32 xOffDst = x + xDst32;
+			u32 offset = mortonOffset(xOffDst, yOffDst) + yOffDstCoarse * wDst32;
 
-			u32 xOffSrc = (xSrc + x);
-			u32 locate = (isBlockSrc) ? (mortonOffset(xOffSrc, yOffSrc) + yOffSrcCoarse * wSrc)
-			                          : (xOffSrc + yOffSrc * wSource);
+			u32 xOffSrc = (xSrc32 + x);
+			u32 locate = (isBlockSrc) ? (mortonOffset(xOffSrc, yOffSrc) + yOffSrcCoarse * wSrc32)
+			                          : (xOffSrc + yOffSrc * wSrc);
 
-			if (offset >= wDst * hDst) continue;
-			if (locate >= (u32)(wSource * hSource)) continue;
+			if (offset >= wDst32 * hDst32) continue;
+			if (locate >= (u32)(wSrc * hSrc)) continue;
 
 			u8 *dstByte, *srcByte;
 
