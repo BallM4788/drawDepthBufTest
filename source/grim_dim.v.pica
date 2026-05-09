@@ -1,0 +1,81 @@
+; dimming shader for Grim Fandango in SCUMMVM
+
+; ORIGINAL GLSL CODE
+;	in vec2 position;
+;	in vec2 texcoord;
+;
+;	uniform vec2 scaleWH;
+;
+;	out vec2 Texcoord;
+;
+;	void main() {
+;		Texcoord = texcoord;
+;		// Coordinates are [0.0;1.0], transform to [-1.0; 1.0]
+;		vec2 pos = position * scaleWH;
+;		pos.x = pos.x * 2.0 - 1.0;
+;		pos.y = pos.y * 2.0 - 1.0;
+;
+;		gl_Position = vec4(pos, 0.0, 1.0);
+;	}
+
+; FRAGMENT SHADER CODE
+;	in vec2 Texcoord;
+;
+;	OUTPUT
+;
+;	uniform sampler2D tex;
+;
+;	void main() {
+;		vec4 c = texture(tex, Texcoord);
+;
+;		float val = (c.r + c.g + c.b) / 10.0;
+;
+;		outColor = vec4(val, val, val, 1);
+;	}
+
+
+; NOTES
+;	- The 3DS does not support custom fragment shaders, so we
+;		do the dimming with a texture environment.
+
+
+; Constants
+.constf myConst(0.1, 1.0, 2.0, 0.5)
+.alias DIVTEN		 myConst.xxxx
+.alias ONES			 myConst.yyyy
+.alias TWOS			 myConst.zzzz
+.alias NEGONES		-myConst.yyyy
+
+
+; Inputs
+.alias    inPos		v0		; in vec2 position
+.alias inTcoord		v1		; in vec2 texcoord
+
+
+; Uniforms
+.fvec scaleWH				; vec2 scaleWH
+
+
+; Outputs
+.out outPos			pos		; gl_Position
+.out outTcoord		tcoord0	; out vec2 Texcoord
+.out outColor		clr		; output 0.1 in RGB components for dimming
+
+
+; Main
+.entry main
+.proc main
+	mov outTcoord,		 inTcoord.xy
+	mul r0.xy,			 scaleWH.xy,		inPos.xy
+	mov r1.xy,			 TWOS
+	; Do NOT flip Y-sign
+	mov outPos.z,		 NEGONES
+	mov outPos.w,		 ONES
+	mad outPos.xy,		 r0.xy,				r1.xy,				NEGONES
+	; 3DS system clips z component of window coordinates in the range [0, -1] instead of [-1, 1]
+	; z-component 0.0 in openGL -> -1.0 in 3DS
+
+	mov outColor.xyz,	 DIVTEN
+	mov outColor.w,		 ONES
+	end
+.end

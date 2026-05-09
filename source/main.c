@@ -7,6 +7,7 @@
 #include "innerVxcolor_shbin.h"
 #include "innerTexture_shbin.h"
 #include "manny_shbin.h"
+#include "grim_dim_shbin.h"
 #include "backgroundvals.h"
 #include "depthvals.h"
 #include "meshes.h"
@@ -20,21 +21,46 @@
 
 u32 __stacksize__ = 10 * 1024 * 1024;
 
-C3D_Tex *derp = &m_s_tiletex;
 
+int nextHigher2(int v) {
+	if (v == 0)
+		return 1;
+	v--;
+	v |= v >> 1;
+	v |= v >> 2;
+	v |= v >> 4;
+	v |= v >> 8;
+	v |= v >> 16;
+	return ++v;
+}
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-static DVLB_s							*outer_dvlb;
-static shaderProgram_s					 outer_program;
-static int								 outer_uLoc_modelView,
-										 outer_uLoc_projection;
-static C3D_Mtx							 outer_mtx_modelView,
-										 outer_mtx_projection;
-static C3D_AttrInfo						 outer_attrInfo;
-static C3D_BufInfo						 outer_bufInfo;
-static C3D_TexEnv						 outer_texEnv;
-static C3D_Tex							 outer_texture;
-static void								*outer_VBO;
+static DVLB_s							*outer_dvlb,
+								*grim_dim_dvlb;
+static shaderProgram_s					 outer_program,
+								 grim_dim_program;
+static int							 outer_uLoc_modelView,
+								 outer_uLoc_projection,
+								 grim_dim_uLoc_scaleWH;
+static C3D_Mtx						 outer_mtx_modelView,
+								 outer_mtx_projection;
+static C3D_AttrInfo						 outer_attrInfo,
+								 grim_dim_attrInfo;
+static C3D_BufInfo						 outer_bufInfo,
+								 grim_dim_bufInfo;
+static C3D_TexEnv						 outer_texEnv,
+								 grim_dim_texEnvSTAGE0,
+								 grim_dim_texEnvSTAGE1;
+static C3D_Tex						 outer_texture,
+								 grim_dim_texture;
+static void							*outer_VBO,
+								*grim_dim_VBO;
+static int grim_dim_xin, grim_dim_yReal;
+static int grim_dim_w, grim_dim_h;
+static int grim_dim_yin;
+static int grim_dim_wcoord, grim_dim_hcoord;
+static int grim_dim_xin8, grim_dim_yin8;
+static int grim_dim_w8, grim_dim_h8;
 
 static void initOuter(void) {
 	// load shader, create program
@@ -85,9 +111,84 @@ static void initOuter(void) {
 	C3D_TexInitVRAM(&outer_texture, 1024, 512, GPU_RGBA8);
 	C3D_TexSetFilter(&outer_texture, GPU_LINEAR, GPU_LINEAR);
 
-	//// SAVE THESE FOR RENDERING
-	//C3D_DepthTest(false, GPU_GEQUAL, GPU_WRITE_ALL);
-	//C3D_CullFace(GPU_CULL_NONE);
+	// GRIM_DIM!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	// load shader, create program
+	grim_dim_dvlb = DVLB_ParseFile((u32 *)grim_dim_shbin, grim_dim_shbin_size);
+	shaderProgramInit(&grim_dim_program);
+	shaderProgramSetVsh(&grim_dim_program, &grim_dim_dvlb->DVLE[0]);
+
+	// get uniform locations
+	grim_dim_uLoc_scaleWH = shaderInstanceGetUniformLocation(grim_dim_program.vertexShader, "scaleWH");
+
+	// set attrinfo
+	AttrInfo_Init(&grim_dim_attrInfo);
+	AttrInfo_AddLoader(&grim_dim_attrInfo, 0 /*inPos*/, GPU_FLOAT, 2);
+	AttrInfo_AddLoader(&grim_dim_attrInfo, 1 /*inTcoord*/, GPU_FLOAT, 2);
+
+	// calculate stuff
+	grim_dim_xin = 25; grim_dim_yReal = 34;
+	grim_dim_w = 330; grim_dim_h = 143;
+	grim_dim_yin = 512 - grim_dim_yReal - grim_dim_h;
+	grim_dim_wcoord = grim_dim_xin + grim_dim_w;
+	grim_dim_hcoord = grim_dim_yin + grim_dim_h;
+	grim_dim_xin8 = grim_dim_xin >> 3 << 3;
+	grim_dim_yin8 = grim_dim_yin >> 3 << 3;
+	grim_dim_w8 = (grim_dim_wcoord % 8 == 0) ? (grim_dim_wcoord - grim_dim_xin8) : ((((grim_dim_wcoord >> 3) + 1) << 3) - grim_dim_xin8);
+	grim_dim_h8 = (grim_dim_hcoord % 8 == 0) ? (grim_dim_hcoord - grim_dim_yin8) : ((((grim_dim_hcoord >> 3) + 1) << 3) - grim_dim_yin8);
+
+	// init texture
+	C3D_TexInit(&grim_dim_texture, (u16)nextHigher2(grim_dim_w8), (u16)nextHigher2(grim_dim_h8), GPU_RGBA8);
+	memset(grim_dim_texture.data, 0xffffffff, nextHigher2(grim_dim_w8) * nextHigher2(grim_dim_h8) * sizeof(u32));
+	C3D_TexSetFilter(&grim_dim_texture, GPU_LINEAR, GPU_LINEAR);
+
+	// more calculate
+	float grim_dim_width = grim_dim_w;
+	float grim_dim_height = grim_dim_h;
+	float grim_dim_x = grim_dim_xin;
+	//            1/512 =           (25 -            24)                                    / 512
+	float grim_dim_texL = (grim_dim_xin - grim_dim_xin8)                                    / (float)grim_dim_texture.width;
+	//          331/512 =           (25 -            24 +        330)                       / 512
+	float grim_dim_texR = (grim_dim_xin - grim_dim_xin8 + grim_dim_w)                       / (float)grim_dim_texture.width;
+	//            2/256 =           (328 +         152 - 512 +             34)              / 256
+	float grim_dim_texT = (grim_dim_yin8 + grim_dim_h8 - 512 + grim_dim_yReal)              / (float)grim_dim_texture.height;
+	//          145/256 =           (328 +         152 - 512 +             34 +        143) / 256
+	float grim_dim_texB = (grim_dim_yin8 + grim_dim_h8 - 512 + grim_dim_yReal + grim_dim_h) / (float)grim_dim_texture.height;
+
+	// make VBO
+	float grim_dim_points[24] = {	// xy, uv
+		// triangle 1
+		grim_dim_x,                  grim_dim_yReal,                   grim_dim_texL, grim_dim_texT, // 0
+		grim_dim_x + grim_dim_width, grim_dim_yReal,                   grim_dim_texR, grim_dim_texT, // 1
+		grim_dim_x + grim_dim_width, grim_dim_yReal + grim_dim_height, grim_dim_texR, grim_dim_texB, // 2
+		// triangle 2
+		grim_dim_x + grim_dim_width, grim_dim_yReal + grim_dim_height, grim_dim_texR, grim_dim_texB, // 2
+		grim_dim_x,                  grim_dim_yReal + grim_dim_height, grim_dim_texL, grim_dim_texB, // 3
+		grim_dim_x,                  grim_dim_yReal,                   grim_dim_texL, grim_dim_texT, // 0
+	};
+
+	grim_dim_VBO = linearAlloc(sizeof(grim_dim_points));
+	memcpy(grim_dim_VBO, grim_dim_points, sizeof(grim_dim_points));
+
+	// set bufinfo
+	BufInfo_Init(&grim_dim_bufInfo);
+	BufInfo_Add(&grim_dim_bufInfo, grim_dim_VBO, sizeof(float) * 4, 2, 0x10);
+
+	// configure texenv
+	C3D_TexEnvInit(&grim_dim_texEnvSTAGE0);
+	C3D_TexEnvFunc(&grim_dim_texEnvSTAGE0, C3D_RGB, GPU_ADD);
+	C3D_TexEnvSrc(&grim_dim_texEnvSTAGE0, C3D_RGB, GPU_TEXTURE0, GPU_TEXTURE0, 0);
+	C3D_TexEnvOpRgb(&grim_dim_texEnvSTAGE0, GPU_TEVOP_RGB_SRC_R, GPU_TEVOP_RGB_SRC_G, 0);
+	C3D_TexEnvFunc(&grim_dim_texEnvSTAGE0, C3D_Alpha, GPU_REPLACE);
+	C3D_TexEnvSrc(&grim_dim_texEnvSTAGE0, C3D_Alpha, GPU_TEXTURE0, 0, 0);
+	C3D_TexEnvOpAlpha(&grim_dim_texEnvSTAGE0, GPU_TEVOP_A_SRC_ALPHA, 0, 0);
+
+	C3D_TexEnvInit(&grim_dim_texEnvSTAGE1);
+	C3D_TexEnvFunc(&grim_dim_texEnvSTAGE1, C3D_RGB, GPU_ADD_MULTIPLY);
+	C3D_TexEnvSrc(&grim_dim_texEnvSTAGE1, C3D_RGB, GPU_PREVIOUS, GPU_PREVIOUS, GPU_PRIMARY_COLOR);
+	C3D_TexEnvOpRgb(&grim_dim_texEnvSTAGE1, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_B, GPU_TEVOP_RGB_SRC_COLOR);
+	C3D_TexEnvFunc(&grim_dim_texEnvSTAGE1, C3D_Alpha, GPU_REPLACE);
+	C3D_TexEnvSrc(&grim_dim_texEnvSTAGE1, C3D_Alpha, GPU_PREVIOUS, 0, 0);
+	C3D_TexEnvOpAlpha(&grim_dim_texEnvSTAGE1, GPU_TEVOP_A_SRC_ALPHA, 0, 0);
 }
 
 static void exitOuter(void) {
@@ -95,6 +196,11 @@ static void exitOuter(void) {
 	linearFree(outer_VBO);
 	shaderProgramFree(&outer_program);
 	DVLB_Free(outer_dvlb);
+
+	C3D_TexDelete(&grim_dim_texture);
+	linearFree(grim_dim_VBO);
+	shaderProgramFree(&grim_dim_program);
+	DVLB_Free(grim_dim_dvlb);
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -583,7 +689,7 @@ static void exitManny(void) {
 }
 
 
-
+bool screenTextureMade = false;
 
 static C3D_RenderTarget					*outer_renderTarget;
 static C3D_RenderTarget					*inner_renderTarget;
@@ -793,6 +899,54 @@ int main() {
 			C3D_FixedAttribSet(1, 0.0, 1.0, 0.0, 1.0);
 			C3D_DrawElements(GPU_TRIANGLES, 6, C3D_UNSIGNED_SHORT, inner_EBO);
 		C3D_FrameEnd(0);
+
+		if (!screenTextureMade) {
+			printf("making grayscale texture\n");
+			u32 *srcCopyStart = (u32 *)inner_renderTarget->frameBuf.colorBuf + (grim_dim_yin8 * 1024 + (grim_dim_xin8 * 8));
+			u32 *dstWriteStart = (u32 *)grim_dim_texture.data + ((grim_dim_texture.height - grim_dim_h8) * grim_dim_texture.width);
+			u32 srcBytesSkip = (1024 - grim_dim_w8) * 8 * 4;
+			u32 dstBytesSkip = (grim_dim_texture.width - grim_dim_w8) * 8 * 4;
+			C3D_SyncTextureCopy(
+				srcCopyStart, GX_BUFFER_DIM((grim_dim_w8 * 8 * 4) >> 4, srcBytesSkip >> 4),
+				dstWriteStart, GX_BUFFER_DIM((grim_dim_w8 * 8 * 4) >> 4, dstBytesSkip >> 4),
+				grim_dim_w8 * grim_dim_h8 * 4,
+				GX_TRANSFER_RAW_COPY(1)
+			);
+
+			for (int i = 0; i < 10000; i++) {
+				if (dstWriteStart[i] != 0xffffffff) {
+					printf("%d, written\n", i);
+					break;
+				}
+			}
+			screenTextureMade = true;
+			printf("grayscale texture made\n");
+		}
+
+		// draw grayscale
+		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+			C3D_FrameDrawOn(inner_renderTarget);
+			C3D_SetViewport(0, 0, 640, 480);
+			C3D_TexBind(0, &grim_dim_texture);
+			C3D_SetTexEnv(0, &grim_dim_texEnvSTAGE0);
+			C3D_SetTexEnv(1, &grim_dim_texEnvSTAGE1);
+			// blend enabled
+			C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+			// depth test disabled, depth func = LESS, depth mask disabled
+			C3D_DepthTest(false, GPU_LESS, GPU_WRITE_COLOR);
+
+			C3D_BindProgram(&grim_dim_program);
+			C3D_SetAttrInfo(&grim_dim_attrInfo);
+			C3D_SetBufInfo(&grim_dim_bufInfo);
+			C3D_FVUnifSet(GPU_VERTEX_SHADER, grim_dim_uLoc_scaleWH, 1 / 640.f, 1 / 480.f, 0.f, 0.f);
+			C3D_DrawArrays(GPU_TRIANGLES, 0, 6);
+			// blend disabled
+			C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+			// depth test enabled, depth func = LESS, depth mask enabled
+			C3D_DepthTest(true, GPU_LESS, GPU_WRITE_ALL);
+		C3D_FrameEnd(0);
+		C3D_TexEnv *resetenv1 = C3D_GetTexEnv(1);
+		C3D_TexEnvInit(resetenv1);
 
 
 		// draw to screen
